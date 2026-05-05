@@ -1,6 +1,8 @@
-from PyQt5.QtWidgets import QToolBar, QAction, QWidget, QVBoxLayout
+from PyQt5.QtWidgets import QToolBar, QAction, QWidget, QVBoxLayout, QComboBox, QLabel, QHBoxLayout
 from PyQt5.QtGui import QColor
 from settings.theme_manager import ThemeManager
+from settings.settings_manager import WWSettingsManager
+from settings.llm_api_aggregator import WWApiAggregator
 from gettext import gettext as _
 
 
@@ -27,12 +29,47 @@ class GlobalToolbar(QWidget):
         self.ia_action = self.add_action("assets/icons/arch.svg", _("Open Internet Archive"), self.controller.open_ia_window)
         self.focus_mode_action = self.add_action("assets/icons/maximize-2.svg", _("Focus Mode"), self.controller.open_focus_mode)
 
+        self.toolbar.addSeparator()
+
+        llm_label = QLabel(_("LLM:"))
+        llm_label.setContentsMargins(4, 0, 2, 0)
+        self.toolbar.addWidget(llm_label)
+
+        self.provider_combo = QComboBox()
+        self.provider_combo.setMinimumWidth(130)
+        self.provider_combo.setToolTip(_("Active LLM provider — switch without opening Settings"))
+        self._populate_provider_combo()
+        self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
+        self.toolbar.addWidget(self.provider_combo)
+
     def add_action(self, icon_path, tooltip, callback):
         action = QAction(ThemeManager.get_tinted_icon(icon_path, self.tint_color), "", self)
         action.setToolTip(tooltip)
         action.triggered.connect(callback)
         self.toolbar.addAction(action)
         return action
+
+    def _populate_provider_combo(self):
+        self.provider_combo.blockSignals(True)
+        self.provider_combo.clear()
+        configs = WWSettingsManager.get_llm_configs()
+        active = WWSettingsManager.get_active_llm_name()
+        for name in configs:
+            self.provider_combo.addItem(name)
+        index = self.provider_combo.findText(active)
+        if index >= 0:
+            self.provider_combo.setCurrentIndex(index)
+        self.provider_combo.blockSignals(False)
+
+    def _on_provider_changed(self, name: str):
+        if not name:
+            return
+        WWSettingsManager.set_active_llm_config(name)
+        WWApiAggregator.aggregator._provider_cache.clear()
+
+    def refresh_provider_combo(self):
+        """Call this after settings are saved to keep the combo in sync."""
+        self._populate_provider_combo()
 
     def update_tint(self, tint_color):
         """Update icon tints when theme changes."""

@@ -515,7 +515,14 @@ class WorkbenchWindow(QMainWindow):
         options = SettingsDialog(self.translation_manager, self)
         options.settings_saved.connect(self.handle_quote_setting_change)
         options.settings_saved.connect(self.handle_category_background_setting_change)
+        options.settings_saved.connect(self.handle_llm_toolbar_refresh)
         options.exec_()
+
+    def handle_llm_toolbar_refresh(self):
+        """Refresh the LLM provider combo in all open project windows."""
+        for project_window in self.open_project_windows.values():
+            if project_window and project_window.isVisible():
+                project_window.refresh_llm_toolbar()
 
     def handle_category_background_setting_change(self):
         """Handle category background setting changes by refreshing open project windows."""

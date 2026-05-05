@@ -963,6 +963,10 @@ class ProjectWindow(QMainWindow):
         """Refresh category background colors when the setting changes."""
         self.project_tree.assign_all_icons()
 
+    def refresh_llm_toolbar(self):
+        """Refresh the provider combo after settings are saved."""
+        self.global_toolbar.refresh_provider_combo()
+
     def change_theme(self, new_theme):
         self.current_theme = new_theme
         stylesheet = ThemeManager.get_stylesheet(new_theme)

@@ -1,5 +1,8 @@
 import requests
-from typing import Dict, List, Optional, Any, Type, Union
+import subprocess
+import shutil
+from functools import partial
+from typing import Dict, List, Optional, Any, Type, Union, Iterator
 from abc import ABC, abstractmethod
 from pydantic import ValidationError
 from langchain_core.output_parsers import StrOutputParser
@@ -13,7 +16,7 @@ from langchain_ollama import ChatOllama
 from langchain_together import ChatTogether
 from .settings_manager import WWSettingsManager
 import logging
-import time  # Added for cache expiration
+import time
 
 # Configuration constants
 DEFAULT_MAX_TOKENS = 1024
@@ -54,7 +57,12 @@ class LLMProviderBase(ABC):
     def model_requires_api_key(self) -> bool:
         """Return whether the provider requires an API key."""
         return False
-    
+
+    @property
+    def is_subprocess(self) -> bool:
+        """Return whether this provider uses a subprocess instead of HTTP."""
+        return False
+
     @property
     def use_reverse_sort(self) -> bool:
         """Return whether to reverse the output of the model list."""
@@ -623,6 +631,66 @@ class CustomProvider(LLMProviderBase):
             request_timeout=self.get_timeout(overrides)
         )
 
+class KiroProvider(LLMProviderBase):
+    """Kiro CLI provider — invokes the `kiro` shell command."""
+
+    @property
+    def provider_name(self) -> str:
+        return "Kiro"
+
+    @property
+    def default_endpoint(self) -> str:
+        return ""
+
+    @property
+    def is_subprocess(self) -> bool:
+        return True
+
+    def get_llm_instance(self, overrides):
+        raise NotImplementedError("Kiro uses subprocess streaming, not LangChain")
+
+    def get_available_models(self, do_refresh: bool = False) -> List[str]:
+        return ["default"]
+
+    def get_model_details(self, do_refresh: bool = False) -> List[Dict[str, Any]]:
+        return [{"id": "default", "name": "Kiro Default", "description": "Kiro CLI model"}]
+
+    def test_connection(self, overrides=None) -> bool:
+        if not shutil.which("kiro"):
+            raise RuntimeError("kiro command not found in PATH")
+        return True
+
+    def stream_subprocess(self, prompt: str, conversation_history=None, interrupt_flag=None) -> Iterator[str]:
+        """Stream response by invoking `kiro <prompt>` as a subprocess."""
+        full_prompt = prompt
+        if conversation_history:
+            lines = []
+            for msg in conversation_history:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                lines.append(f"{role}: {content}")
+            lines.append(f"user: {prompt}")
+            full_prompt = "\n".join(lines)
+
+        process = subprocess.Popen(
+            ["kiro", full_prompt],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            for byte in iter(partial(process.stdout.read, 1), b""):
+                if interrupt_flag and interrupt_flag.is_set():
+                    process.terminate()
+                    break
+                yield byte.decode("utf-8", errors="replace")
+        finally:
+            process.wait()
+            if process.returncode not in (0, None, -15):  # -15 = SIGTERM
+                stderr = process.stderr.read().decode("utf-8", errors="replace")
+                if stderr:
+                    logging.error(f"Kiro stderr: {stderr}")
+
+
 class WW_Aggregator:
     """Main aggregator class for managing LLM providers."""
     
@@ -733,9 +801,12 @@ class LLMAPIAggregator:
         # Fallback for default prompt overrides
         if overrides.get("model") in [None, "Default Model"]:
             overrides["model"] = provider.get_current_model()
-        
+
+        if provider.is_subprocess:
+            return "".join(provider.stream_subprocess(final_prompt, conversation_history))
+
         llm = provider.get_llm_instance(overrides)
-        
+
         if conversation_history:
             from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
             
@@ -788,13 +859,20 @@ class LLMAPIAggregator:
         if overrides.get("model") in [None, "Default Model"]:
             overrides["model"] = provider.get_current_model()
 
-        try:
-            llm = provider.get_llm_instance(overrides)
-        except ValueError as e:
-            raise ValueError(f"Failed to initialize LLM: {e}")
-        
         self.is_streaming = True
         try:
+            if provider.is_subprocess:
+                for chunk in provider.stream_subprocess(final_prompt, conversation_history, self.interrupt_flag):
+                    if self.interrupt_flag.is_set():
+                        break
+                    yield chunk
+                return
+
+            try:
+                llm = provider.get_llm_instance(overrides)
+            except ValueError as e:
+                raise ValueError(f"Failed to initialize LLM: {e}")
+
             if conversation_history:
                 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
                 

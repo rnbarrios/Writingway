@@ -57,6 +57,13 @@ class SettingsManager:
                 "model": "",
                 "api_key": "",
                 "timeout": 30
+            },
+            "Kiro": {
+                "provider": "Kiro",
+                "endpoint": "",
+                "model": "default",
+                "api_key": "",
+                "timeout": 120
             }
         },
         "active_llm_config": "OpenAI"
